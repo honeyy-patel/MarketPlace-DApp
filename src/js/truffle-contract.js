@@ -13,7 +13,8 @@ if (typeof Web3 == "object" && Object.keys(Web3).length == 0) {
 var contract = (function(module) {
 
   // Planned for future features, logging, etc.
-  function Provider(provider) {
+  function Provider(provider) {npm install --save truffle-contract web3 ethjs-abi truffle-blockchain-utils
+3
     this.provider = provider;
   }
 
