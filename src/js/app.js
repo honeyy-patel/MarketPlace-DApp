@@ -1,198 +1,127 @@
 App = {
   web3Provider: null,
   contracts: {},
-  account: 0x0,
-  loading: false,
+  account: null,
 
-  init: function() {
+  init: async function () {
     return App.initWeb3();
   },
 
-  initWeb3: function() {
-    // Initialize web3 and set the provider to the testRPC.
-    if (typeof web3 !== 'undefined') {
-      App.web3Provider = web3.currentProvider;
-      web3 = new Web3(web3.currentProvider);
+  initWeb3: async function () {
+    if (window.ethereum) {
+      App.web3Provider = window.ethereum;
+      window.web3 = new Web3(window.ethereum);
+      try {
+        // Request account access
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        const accounts = await web3.eth.getAccounts();
+        App.account = accounts[0];
+
+        document.getElementById("userAccount").textContent = App.account;
+      } catch (error) {
+        console.error("User denied account access", error);
+      }
     } else {
-      // set the provider you want from Web3.providers
-      App.web3Provider = new Web3.providers.HttpProvider('http://localhost:8545');
-      web3 = new Web3(App.web3Provider);
+      alert("Please install MetaMask!");
     }
-    App.displayAccountInfo();
+
     return App.initContract();
   },
 
-  displayAccountInfo: function() {
-    web3.eth.getCoinbase(function(err, account) {
-      if (err === null) {
-        App.account = account;
-        $("#account").text(account);
-        web3.eth.getBalance(account, function(err, balance) {
-          if (err === null) {
-            $("#accountBalance").text(web3.fromWei(balance, "ether") + " ETH");
-          }
-        });
-      }
-    });
-  },
+  initContract: async function () {
+    const res = await fetch("Marketplace.json");
+    const marketplaceData = await res.json();
 
-  initContract: function() {
-    $.getJSON('MarketPlace.json', function(marketPlaceArtifact) {
-      // Get the necessary contract artifact file and use it to instantiate a truffle contract abstraction.
-      App.contracts.MarketPlace = TruffleContract(marketPlaceArtifact);
+    const networkId = await web3.eth.net.getId();
+    const deployedNetwork = marketplaceData.networks[networkId];
 
-      // Set the provider for our contract.
-      App.contracts.MarketPlace.setProvider(App.web3Provider);
-
-      // Listen for events
-      App.listenToEvents();
-
-      // Retrieve the article from the smart contract
-      return App.reloadArticles();
-    });
-  },
-
-  reloadArticles: function() {
-    // avoid reentry
-    if (App.loading) {
+    if (!deployedNetwork) {
+      alert("Smart contract not deployed to the detected network.");
       return;
     }
-    App.loading = true;
 
-    // refresh account information because the balance may have changed
-    App.displayAccountInfo();
+    App.contracts.Marketplace = new web3.eth.Contract(
+      marketplaceData.abi,
+      deployedNetwork.address
+    );
 
-    var marketPlaceInstance;
+    App.loadArticles();
+    App.bindEvents();
+  },
 
-    App.contracts.MarketPlace.deployed().then(function(instance) {
-      marketPlaceInstance = instance;
-      return marketPlaceInstance.getArticlesForSale();
-    }).then(function(articleIds) {
-      // Retrieve and clear the article placeholder
-      var articlesRow = $('#articlesRow');
-      articlesRow.empty();
+  bindEvents: function () {
+    document.getElementById("sellForm").addEventListener("submit", App.sellArticle);
+  },
 
-      for (var i = 0; i < articleIds.length; i++) {
-        var articleId = articleIds[i];
-        marketPlaceInstance.articles(articleId.toNumber()).then(function(article) {
-          App.displayArticle(
-            article[0],
-            article[1],
-            article[3],
-            article[4],
-            article[5]
-          );
-        });
+  loadArticles: async function () {
+    const articleCount = await App.contracts.Marketplace.methods.getNumberOfArticles().call();
+    const container = document.getElementById("articlesRow");
+    container.innerHTML = "";
+
+    for (let i = 1; i <= articleCount; i++) {
+      const article = await App.contracts.Marketplace.methods.articles(i).call();
+
+      if (article.name) {
+        const div = document.createElement("div");
+        div.className = "col-md-4";
+        div.innerHTML = `
+          <div class="card shadow-sm">
+            <div class="card-body">
+              <h5 class="card-title">${article.name}</h5>
+              <p class="card-text">${article.description}</p>
+              <p><strong>Price:</strong> ${web3.utils.fromWei(article.price, "ether")} ETH</p>
+              <p><strong>Seller:</strong> ${article.seller}</p>
+              ${article.buyer === '0x0000000000000000000000000000000000000000'
+                ? `<button class="btn btn-success" onclick="App.buyArticle(${article.id}, '${article.price}')">Buy</button>`
+                : `<span class="text-muted">Sold</span>`}
+            </div>
+          </div>`;
+        container.appendChild(div);
       }
-      App.loading = false;
-    }).catch(function(err) {
-      console.log(err.message);
-      App.loading = false;
-    });
-  },
-
-  displayArticle: function(id, seller, name, description, price) {
-    // Retrieve the article placeholder
-    var articlesRow = $('#articlesRow');
-
-    var etherPrice = web3.fromWei(price, "ether");
-
-    // Retrieve and fill the article template
-    var articleTemplate = $('#articleTemplate');
-    articleTemplate.find('.panel-title').text(name);
-    articleTemplate.find('.article-description').text(description);
-    articleTemplate.find('.article-price').text(etherPrice + " ETH");
-    articleTemplate.find('.btn-buy').attr('data-id', id);
-    articleTemplate.find('.btn-buy').attr('data-value', etherPrice);
-
-    // seller?
-    if (seller == App.account) {
-      articleTemplate.find('.article-seller').text("You");
-      articleTemplate.find('.btn-buy').hide();
-    } else {
-      articleTemplate.find('.article-seller').text(seller);
-      articleTemplate.find('.btn-buy').show();
     }
-
-    // add this new article
-    articlesRow.append(articleTemplate.html());
   },
 
-  sellArticle: function() {
-    // retrieve details of the article
-    var _article_name = $("#article_name").val();
-    var _description = $("#article_description").val();
-    var _price = web3.toWei(parseFloat($("#article_price").val() || 0), "ether");
-
-    if ((_article_name.trim() == '') || (_price == 0)) {
-      // nothing to sell
-      return false;
-    }
-
-    App.contracts.MarketPlace.deployed().then(function(instance) {
-      return instance.sellArticle(_article_name, _description, _price, {
-        from: App.account,
-        gas: 500000
-      });
-    }).then(function(result) {
-
-    }).catch(function(err) {
-      console.error(err);
-    });
-  },
-
-  // Listen for events raised from the contract
-  listenToEvents: function() {
-    App.contracts.MarketPlace.deployed().then(function(instance) {
-      instance.sellArticleEvent({}, {
-        fromBlock: 0,
-        toBlock: 'latest'
-      }).watch(function(error, event) {
-        if(!error){
-          $("#events").append('<li class="list-group-item">' + event.args._name + ' is for sale' + '</li>');
-        } else {
-          console.error(error);
-        }
-        App.reloadArticles();
-      });
-
-      instance.buyArticleEvent({}, {
-        fromBlock: 0,
-        toBlock: 'latest'
-      }).watch(function(error, event) {
-        if(!error){
-          $("#events").append('<li class="list-group-item">' + event.args._buyer + ' bought ' + event.args._name + '</li>');
-        } else {
-          console.error(error);
-        }
-        App.reloadArticles();
-      });
-    });
-  },
-
-  buyArticle: function() {
+  sellArticle: async function (event) {
     event.preventDefault();
-
-    // retrieve the article price
-    var _articleId = $(event.target).data('id');
-    var _price = parseFloat($(event.target).data('value'));
-
-    App.contracts.MarketPlace.deployed().then(function(instance) {
-      return instance.buyArticle(_articleId, {
-        from: App.account,
-        value: web3.toWei(_price, "ether"),
-        gas: 500000
-      });
-    }).then(function(result) {
-
-    }).catch(function(err) {
+  
+    const name = document.getElementById("articleName").value;
+    const description = document.getElementById("articleDescription").value;
+    const priceEth = document.getElementById("articlePrice").value;
+  
+    const priceInWei = web3.utils.toWei(priceEth, "ether");
+  
+    console.log("Selling item:", name, description, priceInWei);
+  
+    try {
+      await App.contracts.Marketplace.methods
+        .sellArticle(name, description, priceInWei)
+        .send({ from: App.account });
+  
+      alert("✅ Article listed successfully!");
+      App.loadArticles();
+      event.target.reset();
+    } catch (err) {
       console.error(err);
-    });
+      alert("❌ Error listing article.");
+    }
   },
+
+  buyArticle: async function (id, price) {
+    try {
+      await App.contracts.Marketplace.methods.buyArticle(id).send({
+        from: App.account,
+        value: price
+      });
+
+      alert("✅ Article purchased successfully!");
+      App.loadArticles();
+    } catch (err) {
+      console.error(err);
+      alert("❌ Error purchasing article.");
+    }
+  }
 };
 
-$(function() {
-  $(window).load(function() {
-    App.init();
-  });
+window.addEventListener("load", function () {
+  App.init();
 });

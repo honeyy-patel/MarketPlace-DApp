@@ -14,5 +14,11 @@
   "license": "ISC",
   "devDependencies": {
     "lite-server": "^2.3.0"
+  },
+  "dependencies": {
+    "ethjs-abi": "^0.2.1",
+    "truffle-blockchain-utils": "^0.0.10",
+    "truffle-contract": "^4.0.31",
+    "web3": "^4.16.0"
   }
 }
